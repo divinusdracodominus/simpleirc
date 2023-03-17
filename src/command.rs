@@ -1,8 +1,10 @@
 
 use serde::{ser::Serialize, de::Deserialize};
 use std::fmt::Debug;
+
+use err_derive::Error;
 /// denotes a list of channel flags
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ChannelMode {
     /// o = change operator permissions
     OperatorPrivileges,
@@ -52,7 +54,7 @@ impl ModeTrait for ChannelMode {
 
 /// +o should be ignored by server (client should be able to make themselves an operator)
 /// but -o is acceptable
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum UserMode {
     /// i = invisible
     Invisible,
@@ -87,33 +89,45 @@ impl ModeTrait for UserMode {
     }
 }
 
-pub trait ModeTrait: Debug + Clone + Serialize + PartialEq{
+pub trait ModeTrait: Debug + Clone + Serialize + PartialEq + Eq{
     fn from_char(c: char) -> Self;
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum Mode<T: ModeTrait> {
     Add(T),
     Sub(T),
+}
+
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+pub enum CommandParseError {
+    #[error(display = "missing a required argument for command")]
+    MissingArgument,
+    #[error(display = "no recognized command identified in: {:?}", _0)]
+    NoCommandFound(String),
+    #[error(display = "the string passes to Command::parse is empty")]
+    EmptyString,
+    #[error(display = "this message contains only a prefix, and no command {:?}", _0)]
+    PrefixOnly(String),
 }
 
 // PLEASE NOTE: the irc crates irc-proto/src/command.rs
 // was heavily references in creating this type
 // see https://github.com/aatxe/irc/blob/develop/irc-proto/src/command.rs
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     // 3.1 Connection Registration
     /// PASS :password
     PASS(String),
     /// NICK :nickname
     NICK(String),
-    /// USER user mode * :realname
-    USER(String, String, String),
+    /// USER <username> <hostname> <servername> <realname>
+    USER(String, String, String, String),
     /// OPER name :password
     OPER(String, String),
     /// MODE nickname modes
-    UserMODE(String, Vec<Mode<UserMode>>),
+    UserMode(String, Vec<Mode<UserMode>>),
     /// SERVICE nickname reserved distribution type reserved :info
     SERVICE(String, String, String, String, String, String),
     /// QUIT :comment
@@ -123,9 +137,11 @@ pub enum Command {
 
     // 3.2 Channel operations
     /// JOIN chanlist [chankeys] :[Real name]
-    JOIN(String, Option<String>, Option<String>),
+    /// allows you to join a channel, or if you have already joined a channel
+    /// this command will switch your active channel
+    JOIN(Vec<String>, Vec<String>, Option<String>),
     /// PART chanlist :[comment]
-    PART(String, Option<String>),
+    PART(Vec<String>, Option<String>),
     
     /// set channel modes
     ChannelMode(String, Vec<Mode<ChannelMode>>),
@@ -137,7 +153,7 @@ pub enum Command {
     NAMES(Option<String>, Option<String>),
     
     /// LIST [chanlist :[target]]
-    LIST(Option<String>, Option<String>),
+    LIST(Vec<String>, Option<String>),
     
     /// INVITE nickname channel
     INVITE(String, String),
@@ -174,6 +190,10 @@ pub enum Command {
     /// [`Message::response_target`](../message/struct.Message.html#method.response_target)
     /// which is used for this exact purpose.
     NOTICE(String, String),
+
+    /// used internally to indicate a message is a response
+    /// this is not part of IRC standard, but is a convient way to indicate response codes
+    RESPONSE(u16),
 
     // 3.4 Server queries and commands
     /// MOTD :[target]
@@ -242,8 +262,74 @@ pub enum Command {
     ISON(Vec<String>),
 
     // Default option.
-    /// An IRC response code with arguments and optional suffix.
-    //Response(Response, Vec<String>),
-    /// A raw IRC command unknown to the crate.
-    Raw(String, Vec<String>),
+    RAW,
+}
+
+impl Command {
+    pub fn parse(command_str: &str) -> Result<Command, CommandParseError> {
+        let mut parts = command_str.split(" ").map(|v| v.to_string()).collect::<Vec<String>>();
+        parts.reverse();
+        let field = match parts.pop() {
+            Some(part) => part,
+            None => return Err(CommandParseError::EmptyString),
+        };
+        return Self::match_field(field, &mut parts);
+    }
+    fn grab_arg(args: &mut Vec<String>) -> Result<String, CommandParseError> {
+        Ok(match args.pop() {
+            Some(arg) => arg,
+            None => return Err(CommandParseError::MissingArgument) 
+        })
+    }
+    fn grab_required_args(args: &mut Vec<String>) -> Result<Vec<String>, CommandParseError> {
+        Ok(match args.pop() {
+            Some(arg) => {
+                arg.split(",").map(|v| v.to_string()).collect::<Vec<String>>()
+            },
+            None => return Err(CommandParseError::MissingArgument),
+        })
+    }
+    fn grab_args(args: &mut Vec<String>) -> Vec<String> {
+        match args.pop() {
+            Some(arg) => arg.split(",").map(|v| v.to_string()).collect::<Vec<String>>(),
+            None => Vec::new(),
+        }
+    }
+    fn match_field(field: String, args: &mut Vec<String>) -> Result<Self, CommandParseError> {
+        Ok(match field.as_str() {
+            "PASS" => Self::PASS(Self::grab_arg(args)?),
+            "NICK" => Self::NICK(Self::grab_arg(args)?),
+            "JOIN" => Self::JOIN(Self::grab_required_args(args)?, Self::grab_args(args), args.pop()),
+            "LIST" => Self::LIST(Self::grab_args(args), args.pop()),
+            "PART" => Self::PART(Self::grab_args(args), args.pop()),
+            "QUIT" => Self::QUIT(args.pop()),
+            "USER" => Self::USER(Self::grab_arg(args)?, Self::grab_arg(args)?, Self::grab_arg(args)?, Self::grab_arg(args)?),
+            "PING" => Self::PING(Self::grab_arg(args)?, args.pop()),
+            "PONG" => Self::PONG(Self::grab_arg(args)?, args.pop()),
+            _ => Self::RAW,
+        })
+    }
+}
+
+#[test]
+async fn command_parse_test() {
+    let join = String::from("JOIN newroom,secondroom,thirdroom 12345,12345");
+    assert_eq!(Command::parse(&join).unwrap(), Command::JOIN(
+        vec![
+            String::from("newroom"),
+            String::from("secondroom"),
+            String::from("thirdroom")
+        ], 
+        vec![
+            String::from("12345"),
+            String::from("12345")
+        ], None));
+
+    let user = String::from("USER cardinal hephaestus 127.0.0.1:2323 Julian Lazaras");
+    let usercmd = Command::parse(&user).unwrap();
+    assert_eq!(usercmd, Command::USER(
+        "cardinal".to_string(),
+        "hephaestus".to_string(),
+        "127.0.0.1:2323".to_string(), 
+        "Julian".to_string()));
 }
