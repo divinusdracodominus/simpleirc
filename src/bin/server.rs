@@ -33,6 +33,9 @@ async fn main() {
     // maintains a list of messages organized by channel name
     let messages: Arc<RwLock<HashMap<String, Vec<String>>>> = Arc::new(RwLock::new(messagelist));
     
+    // list of all users by the hash of the User struct
+    let users: Arc<RwLock<HashMap<u64, User>>> = Arc::new(RwLock::new(HashMap::new())); 
+
     // main event loop to listen for incoming connections
     loop {
         match listener.accept().await {
@@ -40,11 +43,12 @@ async fn main() {
                 println!("new client: {:?}", addr); 
                 let chanref = channels.clone();
                 let msgref = messages.clone();
-                
+                let userref = users.clone();
+
                 let address_clone = args.address.clone();
                 // an additional task is spawned here to handle the initial handshake
                 task::spawn(async move {
-                    launch_client_listener(chanref, msgref, stream, addr, address_clone).await.unwrap();
+                    launch_client_listener(chanref, msgref, userref, stream, addr, address_clone).await.unwrap();
                 });
             },
             Err(e) => println!("couldn't get client: {:?}", e),
@@ -55,6 +59,7 @@ async fn main() {
 async fn launch_client_listener(
     channels: Arc<RwLock<HashMap<String, ChannelMeta>>>,
     messages: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    users: Arc<RwLock<HashMap<u64, User>>>,
     mut stream: TcpStream,
     addr: SocketAddr,
     address: String,
@@ -80,6 +85,13 @@ async fn launch_client_listener(
         },
         Err(e) => return Err(IrcError::CommandParse(e)),
     };
+
+    {
+        let mut write = users.write().await;
+        write.insert(user.gen_hash(), user.clone());
+        std::mem::drop(write);
+    }
+
     println!("client incoming request received from: {} responding with ping", addr);
     stream.write(format!("PING {} :12345", address).as_bytes()).await?;
 
@@ -113,9 +125,13 @@ async fn launch_client_listener(
 
     loop {
         let (cmddata, bytes_read) = read_message(&mut stream).await?;
-
+        if bytes_read == 0 {
+            println!("client has disconnected");
+            return Ok(());
+        }
         match Message::parse(cmddata) {
             Ok(message) => {
+                println!("raw message: {:?}", message);
                 match message.command() {
                     Command::RAW => {
                         put_message(&current_channel, message.raw_message(), &messages).await;
@@ -134,6 +150,28 @@ async fn launch_client_listener(
                             display_messages(&current_channel, &messages, &mut stream).await?;
                         }
                     },
+                    Command::LIST(channelset, _server) => {
+                        println!("LIST command invoked with: {:?} querylist", channelset);
+                        if channelset.len() == 0 {
+                            list_channels(&channels, &mut stream).await?;
+                        }else{
+                            list_topics(&channels, &channelset, &mut stream).await?;
+                        }
+                    },
+                    Command::NAMES(channellist, _server) => {
+                        if channellist.len() == 0 {
+                            list_all_users(&users, &mut stream).await?;
+                        }else{
+                            
+                        }
+                    },
+                    Command::PART(channellist, _) => {
+                        leave_channels(&channels, channellist, user.gen_hash()).await;
+                    },
+                    Command::QUIT(_) => {
+                        stream.shutdown().await?;
+                        return Ok(());
+                    },
                     _ => {},
                 }
             },
@@ -144,17 +182,60 @@ async fn launch_client_listener(
     Ok(())
 }
 
+async fn leave_channels(
+    channels: &Arc<RwLock<HashMap<String, ChannelMeta>>>,
+    channellist: &Vec<String>,
+    user: u64
+) {
+    let mut write = channels.write().await;
+    for chn in channellist.iter() {
+        if let Some(room) = write.get_mut(chn) {
+            room.leave(user);
+        }
+    }
+    
+}
+
+async fn list_all_users(users: &Arc<RwLock<HashMap<u64, User>>>, stream: &mut TcpStream) -> Result<(), std::io::Error> {
+    let read = users.read().await;
+    let mut outstring = String::new();
+    for (id, user) in read.iter() {
+        outstring.push_str(&format!("{}\n", user.nickname().as_ref().unwrap_or(&user.username().to_string())));
+    }
+    std::mem::drop(read);
+    stream.write(outstring.as_bytes()).await?;
+    Ok(())
+}
+
 async fn list_channels(
     channels: &Arc<RwLock<HashMap<String, ChannelMeta>>>,
     stream: &mut TcpStream
 ) -> Result<(), std::io::Error> {
-
+    let channellist = channels.read().await;
+    let mut outstring = String::new();
+    for (channel, _) in channellist.iter() {
+        outstring.push_str(&format!("{}\n", channel));
+    }
+    std::mem::drop(channellist);
+    stream.write(outstring.as_bytes()).await?;
+    Ok(())
 }
 
 async fn list_topics(
     channels: &Arc<RwLock<HashMap<String, ChannelMeta>>>, 
+    querylist: &Vec<String>,
     stream: &mut TcpStream) -> Result<(), std::io::Error>{
-
+        let channellist = channels.read().await;
+        let mut outstring = String::new();
+        for query in querylist.iter() {
+            if let Some(meta) = channellist.get(query) {
+                let chn = query.clone();
+                outstring.push_str(&format!("{}\n", &meta.topic().as_ref().unwrap_or(&chn)));
+            }
+        }
+        std::mem::drop(channellist);
+        stream.write(outstring.as_bytes()).await?;
+        Ok(())
 }
 
 async fn put_message(channel: &str, message: &str, messages: &Arc<RwLock<HashMap<String, Vec<String>>>>) {

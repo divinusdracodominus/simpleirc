@@ -150,7 +150,7 @@ pub enum Command {
     TOPIC(String, Option<String>),
     
     /// NAMES [chanlist :[target]]
-    NAMES(Option<String>, Option<String>),
+    NAMES(Vec<String>, Option<String>),
     
     /// LIST [chanlist :[target]]
     LIST(Vec<String>, Option<String>),
@@ -273,6 +273,7 @@ impl Command {
             Some(part) => part,
             None => return Err(CommandParseError::EmptyString),
         };
+        assert!(field != "".to_string());
         return Self::match_field(field, &mut parts);
     }
     fn grab_arg(args: &mut Vec<String>) -> Result<String, CommandParseError> {
@@ -306,6 +307,7 @@ impl Command {
             "USER" => Self::USER(Self::grab_arg(args)?, Self::grab_arg(args)?, Self::grab_arg(args)?, Self::grab_arg(args)?),
             "PING" => Self::PING(Self::grab_arg(args)?, args.pop()),
             "PONG" => Self::PONG(Self::grab_arg(args)?, args.pop()),
+            "NAMES" => Self::NAMES(Self::grab_args(args), args.pop()),
             _ => Self::RAW,
         })
     }

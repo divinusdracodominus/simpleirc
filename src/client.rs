@@ -39,9 +39,16 @@ impl CmdOperator {
                     newstring.push(val);
                 }
                 
-                Ok(newstring)
+                Ok(newstring.trim().to_string())
             }else{
-                return Err(CommandParseError::NoCommandFound(input));
+                let mut invec = input.chars().collect::<Vec<char>>();
+                let mut newstring = String::new();
+                for i in 1..invec.len() {
+                    let mut val = invec[i];
+                    val = val.to_ascii_uppercase();
+                    newstring.push(val);
+                }
+                Ok(newstring.trim().to_string())
             }
         }else{
             // its just a message, forward it right along
@@ -55,4 +62,7 @@ async fn convert_input() {
     let input = "/join cardinal".to_string();
     let parsed = CmdOperator::parse_input(input).unwrap();
     assert_eq!(parsed.as_str(), String::from("JOIN cardinal"));
+    let list = "/list".to_string();
+    let list_parsed = CmdOperator::parse_input(list).unwrap();
+    assert_eq!(list_parsed.as_str(), "LIST".to_string());
 }

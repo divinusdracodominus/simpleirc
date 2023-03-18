@@ -6,7 +6,6 @@ use structopt::StructOpt;
 pub mod command;
 pub mod channel;
 pub mod message;
-pub mod reply;
 pub mod user;
 pub mod client;
 
@@ -74,7 +73,7 @@ pub async fn read_message<S: AsyncReadExt + std::marker::Unpin>(stream: &mut S) 
     let mut buffer: [u8;512] = [0;512];
     
     let bytes_read = stream.read(&mut buffer).await?;
-    let data = match String::from_utf8(buffer.to_vec()) {
+    let data = match String::from_utf8(buffer[0..bytes_read].to_vec()) {
         Ok(string) => string,
         Err(_) => return Err(IrcError::Utf8Error),
     };

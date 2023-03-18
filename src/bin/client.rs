@@ -82,8 +82,12 @@ async fn main() {
     let operator = CmdOperator::default();
 
     loop {
-        print!("=>");
+        //print!("=>");
         let input = CmdOperator::read_input().unwrap();
-        sender.send(input).await;
+        sender.send(input.clone()).await;
+        if input == "QUIT" {
+            //stream.shutdown().await.unwrap();
+            std::process::exit(0);
+        }
     }
 }

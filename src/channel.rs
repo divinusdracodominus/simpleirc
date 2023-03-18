@@ -1,25 +1,25 @@
 use crate::command::ChannelMode;
+use std::collections::HashSet;
 pub struct ChannelMeta {
     name: String,
     modes: Vec<ChannelMode>,
     /// a vector of user ids
-    users: Vec<u64>,
+    users: HashSet<u64>,
     topic: Option<String>,
     limit: Option<u32>,
 }
 
 impl ChannelMeta {
-    pub fn topic(&mut self, topic: String) -> &mut Self {
-        self.topic = Some(topic);
-        self
+    pub fn topic(&self) -> &Option<String> {
+        &self.topic
     }
     pub fn limit(&mut self, limit: u32) -> &mut Self {
         self.limit = Some(limit);
         self
     }
     pub fn new(name: String, user: u64) -> Self {
-        let mut users = Vec::new();
-        users.push(user);
+        let mut users = HashSet::new();
+        users.insert(user);
         Self {
             name,
             modes: Vec::new(),
@@ -32,6 +32,9 @@ impl ChannelMeta {
     /// for now this doesn't perform any substantial checks
     /// it just allows users in
     pub fn join(&mut self, user: u64) {
-        self.users.push(user);
+        self.users.insert(user);
+    }
+    pub fn leave(&mut self, user: u64) {
+        self.users.remove(&user);
     }
 }

@@ -31,6 +31,10 @@ impl User {
         self
     }
 
+    pub fn nickname(&self) -> &Option<String> {
+        &self.nick
+    }
+
     pub fn gen_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
