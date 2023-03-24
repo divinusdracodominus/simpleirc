@@ -142,7 +142,7 @@ pub enum Command {
     JOIN(Vec<String>, Vec<String>, Option<String>),
     /// PART chanlist :[comment]
     PART(Vec<String>, Option<String>),
-    
+
     /// set channel modes
     ChannelMode(String, Vec<Mode<ChannelMode>>),
     
